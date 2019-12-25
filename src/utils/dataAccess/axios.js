@@ -35,27 +35,26 @@ const DEFAULT_CONFIG = {
   autoUrlPrefix: false, //是否自动补全URL前缀，比如/crm-lz-ls/api
   addAuthorization: true,
   successConfig: null, // {message: '', callback: function, isForceShow: false}
-  failConfig: null, // {message: '', callback: function, isForceShow: false}
-  "access-control-allow-origin": "http://localhost:3008"
+  failConfig: null // {message: '', callback: function, isForceShow: false}
 };
 
 const formatPayload = responseData => {
-  if (!isPlainObject(responseData.data)) {
-    if (!isNullOrUndefined(responseData.data)) {
-      responseData.data = {
-        // 如果data不是{}对象，都被认为是丑陋的数据，封装到data中
-        uglyData: responseData.data
+  if (!isPlainObject(responseData.payload)) {
+    if (!isNullOrUndefined(responseData.payload)) {
+      responseData.payload = {
+        // 如果payload不是{}对象，都被认为是丑陋的数据，封装到payload中
+        uglyData: responseData.payload
       };
     } else {
-      responseData.data = {};
+      responseData.payload = {};
     }
   }
-  // 如果data只有一个data，则将data提升
+  // 如果payload只有一个data，则将data提升
   if (
-    isPlainObject(responseData.data.data) &&
-    Object.keys(responseData.data).length === 1
+    isPlainObject(responseData.payload.data) &&
+    Object.keys(responseData.payload).length === 1
   ) {
-    responseData.data = responseData.data.data;
+    responseData.payload = responseData.payload.data;
   }
 };
 /**
@@ -64,7 +63,7 @@ const formatPayload = responseData => {
  *
  * @param data { PlainObject } 后端返回的reponse, 格式为：
  *   {
-      "data": {...},
+      "payload": {...},
       "success": false|true,
       "message": {
         "code": 504,
@@ -77,14 +76,14 @@ const formatPayload = responseData => {
 const responseHandler = (dispatch, config) => {
   formatPayload(config.responseData);
   // 后端返回的结果数据和前端发起请求时的额外数据，都会通过payload发给请求处理完毕的回调函数
-  config.responseData.data.extendData = config.extendData;
-  if (config.responseData.code === '0000') {
+  config.responseData.payload.extendData = config.extendData;
+  if (config.responseData.success === true) {
     if (config.actionType) {
       dispatch({
         type: config.actionType,
         [config.actionDataKey]: config.responseData.pageSize
           ? config.responseData
-          : config.responseData.data
+          : config.responseData.payload
       });
     }
     if (config.successConfig) {
@@ -95,16 +94,16 @@ const responseHandler = (dispatch, config) => {
         config.successConfig.callback(
           config.responseData.pageSize
             ? config.responseData
-            : config.responseData.data
+            : config.responseData.payload
         );
       }
     }
-  } else if (config.responseData.code === '9999') {
+  } else {
     // 其它异常处理: 200的异常情况(success为false)、400、404、500(success标记位不存在)等
     if (!config.responseData.message) {
       config.responseData.message = {};
     }
-    const errorMsg = config.responseData.message;
+    const errorMsg = config.responseData.message.desc;
     const errorCode = config.responseData.message.code;
     if (errorMsg) {
       if (config.failConfig && config.failConfig.isForceShow) {
@@ -204,6 +203,17 @@ export const axiosHandler = config => {
       config.method.toLowerCase() === "put"
     ) {
       let contentType = "application/json";
+      // let contentType = "application/x-www-form-urlencoded";
+
+      // if (!(config.bodyData instanceof FormData)) {
+      //   contentType = 'application/json'
+      // } else if (config.bodyData instanceof FormData && config.contentType === 'multipart/form-data') {
+      //   contentType = 'multipart/form-data'
+      // } else if (config.bodyData instanceof FormData) {
+      //   contentType = 'application/x-www-form-urlencoded'
+      //   config.bodyData = [...config.bodyData.entries()].map((d) => `${d[0]}=${d[1]}`)
+      //   config.bodyData = config.bodyData.join('&')
+      // }
 
       axiosConfig = Object.assign(axiosConfig, {
         headers: contentType ? { "content-type": contentType } : {},
@@ -219,12 +229,87 @@ export const axiosHandler = config => {
     //
     return axios(axiosConfig)
       .then(response => {
+        // 200
+        // if (response.config.url.indexOf("api/relation_graph") > -1) {
+        //   response.data.payload = response.data.data;
+        //   // response.data.delete("data");
+        // }
+        // 1. 一种特殊的200，success为false
+        // {"success":false,"message":{"code":10017,"desc":"用户名或密码错误"}}
         config.responseData = response.data;
         responseHandler(dispatch, config);
       })
       .catch(error => {
+        // 400（坏请求），404, 500等，一些非http请求错误也会被捕获到
+
+        // 1.未发送(举例如下)
+        // error: {
+        //   message: "Converting circular structure to JSON",
+        //   stack: "TypeError: Converting circular structure to JSON↵    at JSON.stringify (<anonymous>)↵    at transformRequest (http://localhost:3000/static/js/0.chunk.js:4469:19)↵    at transform (http://localhost:3000/static/js/0.chunk.js:4404:12)↵    at Object.forEach (http://localhost:3000/static/js/0.chunk.js:5200:12)↵    at transformData (http://localhost:3000/static/js/0.chunk.js:4403:9)↵    at dispatchRequest (http://localhost:3000/static/js/0.chunk.js:4287:17)"
+        // }
+
+        // 2.已发送(400、404、500等，举例如下)
+        //   error: {
+        //     "config": {
+        //         "transformRequest": {},
+        //         "transformResponse": {},
+        //         "timeout": 0,
+        //         "xsrfCookieName": "XSRF-TOKEN",
+        //         "xsrfHeaderName": "X-XSRF-TOKEN",
+        //         "maxContentLength": -1,
+        //         "headers": {
+        //             "Accept": "application/json, text/plain, */*",
+        //             "Content-Type": "application/json"
+        //         },
+        //         "method": "post",
+        //         "url": "/crm-jj/api/business/createBusinessChance?",
+        //         "data": "{\"businessStatus\":\"1\",\"cooperators\":[{\"id\":248,\"userNo\":\"248\",\"password\":null,\"name\":\"客户经理248号\",\"sex\":\"0\",\"status\":null,\"emplyPos\":null,\"emplyPost\":null,\"superEmplyNum\":null,\"idNumber\":null,\"phone\":null,\"email\":null,\"birthDt\":null,\"inPosDt\":null,\"belongOrgNum\":\"247\",\"belongOrg\":\"九江银行支行247号\",\"belongDeptNum\":null,\"belong_dept\":null,\"cont_addr\":null,\"leavePosDt\":null,\"enabledFlag\":null,\"updatedBy\":null,\"createdBy\":null,\"updatedDt\":null,\"createdDt\":null,\"orgId\":247,\"orgNo\":\"247\",\"isPerson\":true,\"zIndex\":4,\"personChecked\":true,\"username\":\"客户经理248号\"}],\"customerId\":\"30002\",\"customerName\":\"测试行内公司一号\",\"customerType\":\"1\",\"enable\":\"4\",\"executor\":248,\"name\":\"d\",\"remark\":\"\",\"schedulerDateIds\":[\"\"],\"validDt\":\"2019-03-26 21:57:00\"}"
+        //     },
+        //     "request": {},
+        //     "response": {
+        //         "data": {
+        //             "success": false,
+        //             "message": "field:[executor_org] message:[机构编号不能为空]"
+        //         },
+        //         "status": 400,
+        //         "statusText": "Bad Request",
+        //         "headers": {
+        //             "date": "Tue, 26 Mar 2019 13:58:18 GMT",
+        //             "content-encoding": "gzip",
+        //             "x-powered-by": "Express",
+        //             "vary": "Origin, Accept-Encoding",
+        //             "content-type": "application/json;charset=UTF-8",
+        //             "access-control-allow-origin": "http://localhost:5000",
+        //             "transfer-encoding": "chunked",
+        //             "connection": "close",
+        //             "access-control-allow-credentials": "true",
+        //             "x-application-context": "application:haizhi:8091"
+        //         },
+        //         "config": {
+        //             "transformRequest": {},
+        //             "transformResponse": {},
+        //             "timeout": 0,
+        //             "xsrfCookieName": "XSRF-TOKEN",
+        //             "xsrfHeaderName": "X-XSRF-TOKEN",
+        //             "maxContentLength": -1,
+        //             "headers": {
+        //                 "Accept": "application/json, text/plain, */*",
+        //                 "Content-Type": "application/json"
+        //             },
+        //             "method": "post",
+        //             "url": "/crm-jj/api/business/createBusinessChance?",
+        //             "data": "{\"businessStatus\":\"1\",\"cooperators\":[{\"id\":248,\"userNo\":\"248\",\"password\":null,\"name\":\"客户经理248号\",\"sex\":\"0\",\"status\":null,\"emplyPos\":null,\"emplyPost\":null,\"superEmplyNum\":null,\"idNumber\":null,\"phone\":null,\"email\":null,\"birthDt\":null,\"inPosDt\":null,\"belongOrgNum\":\"247\",\"belongOrg\":\"九江银行支行247号\",\"belongDeptNum\":null,\"belong_dept\":null,\"cont_addr\":null,\"leavePosDt\":null,\"enabledFlag\":null,\"updatedBy\":null,\"createdBy\":null,\"updatedDt\":null,\"createdDt\":null,\"orgId\":247,\"orgNo\":\"247\",\"isPerson\":true,\"zIndex\":4,\"personChecked\":true,\"username\":\"客户经理248号\"}],\"customerId\":\"30002\",\"customerName\":\"测试行内公司一号\",\"customerType\":\"1\",\"enable\":\"4\",\"executor\":248,\"name\":\"d\",\"remark\":\"\",\"schedulerDateIds\":[\"\"],\"validDt\":\"2019-03-26 21:57:00\"}"
+        //         },
+        //         "request": {}
+        //     },
+        //     "message": "Request failed with status code 400",
+        //     "stack": "Error: Request failed with status code 400↵    at createError (http://localhost:3000/static/js/0.chunk.js:4232:15)↵    at settle (http://localhost:3000/static/js/0.chunk.js:4374:12)↵    at XMLHttpRequest.handleLoad (http://localhost:3000/static/js/0.chunk.js:3774:7)"
+        // }
+
+        // {"success":false,"message":{"code":10017,"desc":"用户名或密码错误"}}
+        // config.responseData = error.response || {message: error.message}
         config.responseData = {
-          success: '9999',
+          success: false,
           message: { desc: error.message }
         };
         responseHandler(dispatch, config);
